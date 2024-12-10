@@ -17,7 +17,7 @@ BEGIN
 	BEGIN TRY
 		DECLARE @client AS VARCHAR(10), @data_type AS VARCHAR(4);
 		SET @client = 'COL';
-		SET @data_type = 'CUST';
+		SET @data_type = 'CUST';hj
 
 		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
 		VALUES (@client, @data_type, 'INFO', 'SQL Process started');
