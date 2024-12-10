@@ -1,0 +1,140 @@
+USE [WFAR_Rel41_Test];
+GO
+
+/*
+  Author(s): Aniruddha Ray
+  Date Created [PROD]: 
+  Revisions:
+	MM/dd/20yy- 
+*/
+
+CREATE PROCEDURE [tcd_imports].[usp_tcd_imports_getnewcustdata_col]
+(
+	@success BIT = 0 OUTPUT
+)
+AS
+BEGIN
+	BEGIN TRY
+		DECLARE @client AS VARCHAR(10), @data_type AS VARCHAR(4);
+		SET @client = 'COL';
+		SET @data_type = 'CUST';
+
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', 'SQL Process started');
+
+		-- Loading client items data into a temp table
+		IF OBJECT_ID('tempdb..#tcd_itemdata_col', 'U') IS NOT NULL
+			DROP TABLE #tcd_itemdata_col
+			INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+			VALUES (@client, @data_type, 'DEBUG', 'An existing temp table found and deleted');
+		SELECT DISTINCT NAME,Cust_ID
+		INTO #tcd_itemdata_col
+		FROM [tcd_imports].[tcd_imports_rawitemsdata_col];
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', 'Client Items data loaded into temp table; ' + CAST(@@ROWCOUNT AS VARCHAR(7)) + ' rows');
+
+		-- Cleansing data
+		UPDATE #tcd_itemdata_col
+		SET NAME =
+				REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(NAME,
+					CHAR(9), ''),
+					CHAR(10), ''),
+					'-', ''),
+					'%', ''),
+					'+', ''),
+					--'/', ''),
+					'#', ''),
+					'*', ''),
+					--'.', ''),
+					--',',''),
+					'>',''),
+					'<',''),
+					'''', ''),
+					' ', ''),
+			Cust_ID =
+				 REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(Cust_ID,
+					CHAR(9), ''),
+					CHAR(10), ''),
+					'-', ''),
+					'%', ''),
+					'+', ''),
+					'/', ''),
+					'#', ''),
+					'&', ''),
+					'*', ''),
+					'(', ''),
+					')', ''),
+					'.', ''),
+					',',''),
+					'>',''),
+					'<',''),
+					' ', ''),
+					'''', ''),
+					':','')
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', 'Data cleansed');
+
+		-- Removing Duplicates
+		DELETE T
+		FROM
+		(
+		SELECT *, 
+			DupRank = ROW_NUMBER() OVER (
+						PARTITION BY Cust_ID
+						ORDER BY Cust_ID ASC)
+		FROM #tcd_itemdata_col
+		) AS T
+		WHERE DupRank > 1;
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', CAST(@@ROWCOUNT AS VARCHAR(7)) + ' duplicates removed');
+		
+		-- Getting list of new customers
+		IF OBJECT_ID('tempdb..#tcd_newcusts_col', 'U') IS NOT NULL
+			DROP TABLE #tcd_newcusts_col
+			INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+			VALUES (@client, @data_type, 'DEBUG', 'An existing temp table found and deleted');
+		SELECT DISTINCT ii_acct_nbr
+		INTO #tcd_newcusts_col
+		FROM [tcd_imports].[tcd_imports_rejected_items]
+		WHERE ii_interface_status LIKE 'Customer does not exist%'
+		  AND ii_batch_nbr = @client
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', 'List of new customers obtained; ' + CAST(@@ROWCOUNT AS VARCHAR(7)) + ' count');
+
+		-- Loading data into the interface table
+		BEGIN TRANSACTION;
+			INSERT INTO [dbo].[wsys_cust_interface_tcd] (
+				ci_rec_type,
+				ci_entity,
+				ci_major,
+				ci_minor,  
+				ci_acct_nbr,
+				ci_cust_name)
+			SELECT DISTINCT
+				'A',
+				'TCD',
+				'COL',
+				'0000',  
+				nc.ii_acct_nbr,
+				i.NAME
+			FROM #tcd_newcusts_col nc
+			JOIN #tcd_itemdata_col i
+			  ON nc.ii_acct_nbr = i.Cust_ID
+		COMMIT TRANSACTION;
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'INFO', 'New Cust info loaded into interface table');
+	END TRY
+
+	BEGIN CATCH
+		DECLARE @err_msg VARCHAR(1000);
+		SET @err_msg = 'Err. Ln: ' + CONVERT(VARCHAR, ERROR_LINE()) + '; Err. Desc: ' + LEFT(ERROR_MESSAGE(), 900)
+		INSERT INTO tcd_imports.[tcd_imports_run_log] (data_client, data_type, log_type, log_message)
+		VALUES (@client, @data_type, 'FATAL', @err_msg);
+		BEGIN TRY
+			ROLLBACK TRANSACTION;
+		END TRY
+		BEGIN CATCH
+		END CATCH
+	END CATCH
+END
+GO
